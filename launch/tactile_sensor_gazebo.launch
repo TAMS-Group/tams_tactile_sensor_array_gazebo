@@ -1,0 +1,173 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- launches the Gazebo tactile-sensor selftest:
+
+       - uploads the "selftest" URDF to the param server,
+       - this includes one matrix, one linear, and one single-cell sensor,
+       - starts Gazebo and spawns the sensors URDF,
+       - uploads Gazebo controllers needed for tactile simulation,
+       - starts the visualizer node (shows wrench+force+contacts in rviz),
+       - starts the OpenCV node (shows tactile image using cv2),
+       - starts rviz.
+
+       Once the simulation is running, spawn extra Gazebo objects (e.g. Coke can)
+       to play with the sensor(s).
+  -->
+
+  <arg name="gazebo" default="true" />
+  <arg name="paused" default="false" />
+  <arg name="debug"  default="false" />
+  <arg name="world_name" default="worlds/empty.world" />
+  <arg name="launch_rviz" default="true" />
+  <arg name="rviz_nice_priority" value="5" />
+
+
+  <!-- set Gazebo gzserver command arguments -->
+  <arg unless="$(arg paused)" name="command_arg1" value=""/>
+  <arg     if="$(arg paused)" name="command_arg1" value="-u"/>
+
+  <arg unless="$(arg debug)" name="script_type" value="gzserver"/>
+  <arg     if="$(arg debug)" name="script_type" value="debug"/>
+
+
+  <!-- start gazebo server, unless disabled via gazebo=false -->
+  <group if="$(arg gazebo)">
+    <param name="/use_sim_time" value="true" />
+
+    <node name="gazebo" pkg="gazebo_ros" type="$(arg script_type)" respawn="false" output="screen"
+          args="$(arg command_arg1) $(arg world_name)" />
+
+    <node name="gazebo_gui" pkg="gazebo_ros" type="gzclient" respawn="false" output="screen"/>
+  </group>
+
+
+  <!-- one single-cell, one linear, and one matrix sensor, fixed to /world -->
+  <param name="robot_description" 
+         command="$(find xacro)/xacro $(find tams_tactile_sensor_array_gazebo)/urdf/tactile_sensor.xacro" />
+
+
+  <!-- spawn the tactile sensor setup at xyz (0,0,0), default configuration for the arm -->
+  <node name="spawn_tactile_sensor" pkg="gazebo_ros" type="spawn_model" 
+        args="-urdf -param robot_description -x 0 -y 0 -z 0 -Y 0  -model tactile_sensor" 
+        respawn="false" output="screen" />
+
+
+  <!-- config file for the arm and gripper gazebo joint state and trajectory controllers -->
+  <rosparam file="$(find tams_tactile_sensor_array_gazebo)/config/tactile_sensor_gazebo_controllers.yaml" command="load"/>
+
+
+  <!-- Gazebo controller for smooth arm trajectory control -->
+  <node name="spawn_tactile_sensor_controller"
+    pkg="controller_manager" type="spawner" respawn="false" output="screen" 
+    args="joint_state_controller tactile_sensor_traj_controller" >
+  </node>
+
+
+  <!-- publish robot-state to tf, take remapped /pa10/joint_states  -->
+  <node pkg="robot_state_publisher" type="robot_state_publisher" 
+        name="tactile_sensor_state_publisher" respawn="false" >
+     <param name="publish_frequency" type="double" value="100.0" />
+     <!--
+     <remap from="robot_description" to="robot_description" />
+     <remap from="joint_states" to="/joint_states" />
+     -->
+  </node>
+
+
+  <!-- tactile matrix (2D-sensor) rviz visualizer -->
+  <node pkg="tams_tactile_sensor_array_gazebo" type="tactile_sensor_visualizer.py"
+        name="tactile_sensor_visualizer"
+        output="screen" respawn="false" >
+
+    <param name="verbose" value="0" />
+    <param name="sensor_name" value="tactile_matrix1" />
+    <param name="sensor_frame" value="tactile_matrix1_0_0_sensor_cell" />
+    <param name="ny" value="5" />
+    <param name="nx" value="3" />
+    <param name="sx" value="0.1" />
+    <param name="sy" value="0.1" />
+    <param name="rate" value="10" />
+    <param name="fscale" value="1.0" />
+  </node>
+
+
+  <!-- tactile array (1D-sensor) visualizer -->
+  <node pkg="tams_tactile_sensor_array_gazebo" type="tactile_sensor_visualizer.py" 
+        name="tactile_array_visualizer" output="screen" respawn="false" >
+
+    <param name="verbose" value="0" />
+    <param name="sensor_name" value="tactile_array1" />
+    <param name="sensor_frame" value="tactile_array1_0_sensor_cell" />
+    <param name="ny" value="0" />
+    <param name="nx" value="6" />
+    <param name="sx" value="0.1" />
+    <param name="sy" value="0.1" />
+    <param name="rate" value="50" />
+    <param name="fscale" value="5.0" />
+  </node>
+ 
+
+  <!-- tactile cell (single sensor) visualizer -->
+  <node pkg="tams_tactile_sensor_array_gazebo" type="tactile_sensor_visualizer.py" 
+        name="tactile_cell_visualizer" output="screen" respawn="false" >
+
+    <param name="verbose" value="0" />
+    <param name="sensor_name" value="tactile1" />
+    <param name="sensor_frame" value="tactile1_sensor_cell" />
+    <param name="ny" value="0" />
+    <param name="nx" value="0" />
+    <param name="sx" value="0.1" />
+    <param name="sy" value="0.1" />
+    <param name="rate" value="50" />
+    <param name="fscale" value="1.0" />
+  </node>
+
+
+  <!-- tactile cell proxy: generate output data matching our Arduino sensor -->
+  <!-- See github.com/TAMS-Group/tams_tactile_sensor_array and ...sensor_array_hardware -->
+  <node pkg="tams_tactile_sensor_array_gazebo" type="tactile_sensor_proxy.py" 
+        name="tactile_matrix1_proxy" output="screen" respawn="false" >
+
+    <param name="verbose" value="0" />
+    <param name="sensor_name" value="tactile_matrix1" />
+    <param name="sensor_frame" value="tactile_matrix1_0_0_sensor_cell" />
+    <param name="sensor_id" value="1" />
+
+    <param name="ny" value="5" />
+    <param name="nx" value="3" />
+    <param name="sx" value="0.05" />
+    <param name="sy" value="0.04" />
+    <param name="rate" value="20" />
+    <param name="alpha" value="0.1" />
+    <param name="fscale" value="-50.0" />
+  </node>
+
+
+  <!-- also launch the cv2-based tactile image display node -->
+  <!-- 
+       This usually expects a YAML file with (multi-) sensor configuration,
+       but for now we just hardcode the required hierarchical params, and
+       remap the input topic to the tactile_matrix1_proxy started above.
+  -->
+  <!--
+  <param name="/TactileSensor/" value="/niklas" />
+  <param name="/TactileSensor/tactile" value="/niklass" />
+  -->
+  <param name="/TactileSensor/tactile/sensor_data_namespace" value="/niklasss" />
+
+
+  <node pkg="tams_tactile_sensor_array" type="tactile_visualizer.py"
+        name="tactile_matrix_image" output="screen" respawn="false" >
+    <!-- "/TactileSensor/tactile/sensor_data_namespace') + '/' + str(sensor_id) -->
+    <remap from="/niklasss/1" to="/tactile_matrix1_proxy/tactile_data" />
+  </node>
+ 
+
+  <group if="$(arg launch_rviz)">
+     <node pkg="rviz" type="rviz" name="rviz" 
+           args="-d $(find tams_tactile_sensor_array_gazebo)/config/tactile_sensor_demo.rviz" 
+           launch-prefix="nice -n $(arg rviz_nice_priority)" >
+     </node>
+  </group>
+
+</launch>
