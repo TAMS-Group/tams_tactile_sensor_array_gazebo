@@ -1,0 +1,214 @@
+<?xml version="1.0" ?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="tactile_senosr">
+
+  <!-- URDF models with Gazebo joint and contact-sensor plugins
+       for our home-made tactile sensors based on semiconducting 
+       "velostat" foil.
+
+       We provide three main macros:
+       - tactile_sensor_cell(   name,         sx, sy, sz, d_sz, ... )
+       - tactile_sensor_array(  name,     nx, sx, sy, sz, d_sz, ... )
+       - tactile_sensor_matrix( name, ny, nx, sx, sy, sz, d_sz, ... )
+
+       Each sensor cell has size (sx*sy) and thickness (sz) and will
+       deflect by (d_sz) under full force. Each cell instantiates a
+       Gazebo force sensor and a Gazebo bumper sensor that is activated 
+       on contact (assumed to be with the front surface (+z) of the 
+       sensor cell.
+
+       For simplicity, sensor origin is at the center of the first cell;
+       use a static transform as needed to match your actual setup.
+  -->
+      
+  <xacro:arg name="use_gazebo_control_plugin" default="1" />
+  <xacro:arg name="use_gazebo_ft_plugin" default="1" />
+  <xacro:arg name="use_gazebo_contact_plugin" default="1" />
+  <xacro:arg name="make_selftest" default="1" />
+
+
+  <!-- density of the velostat sensor foil: about 1000 kg / m^3 -->
+  <xacro:property name="foil_density" value="1000.0" />
+
+
+  <xacro:macro name="tactile_sensor_joint_state_controller">
+    <!-- optional joint_state controller plugin -->
+    <xacro:if value="$(arg use_gazebo_control_plugin)" >
+      <gazebo>
+        <plugin name="tactile_sensor_gazebo_ros_control" filename="libgazebo_ros_control.so">
+          <robotParam>robot_description</robotParam> <!-- URDF name on param server -->
+          <!--<robotNamespace>/${name}</robotNamespace>-->
+          <robotSimType>gazebo_ros_control/DefaultRobotHWSim</robotSimType>
+          <legacyModeNS>true</legacyModeNS>
+        </plugin>
+      </gazebo>
+    </xacro:if>
+  </xacro:macro>
+
+
+  <xacro:macro name="tactile_sensor_cell" params="parent name sx sy sz d_sz border xpos ypos zpos" >
+    <link name="${name}_sensor_cell">
+      <inertial>
+        <origin xyz="0 0 0" />
+        <mass value="${foil_density*sx*sy*sz}" />
+        <inertia  ixx="0.00003" ixy="0" ixz="0" iyy="0.00003" iyz="0" izz="0.0001" />
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <material name="${name}_sensor_surface_material" >
+          <color rgba="0.95 0.95 0.85 1.0" />
+        </material> 
+        <geometry>
+          <box size="${sx-border} ${sy-border} ${sz-border}" />
+        </geometry>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <box size="${sx-border} ${sy-border} ${sz-border}" />
+        </geometry>
+      </collision>
+    </link>
+
+    <gazebo reference="${name}_sensor_cell">
+      <!-- todo: make the material rather soft and allow interpenetration -->
+      <material>Gazebo/Silver</material>
+      <turnGravityOff>false</turnGravityOff>
+      <selfCollide>true</selfCollide>
+      <mu1>0.2</mu1>
+      <mu2>0.2</mu2>
+      <kp>1000000.0</kp>
+      <kd>1.0</kd>
+    </gazebo>
+
+    <joint name="${name}_sensor_joint" type="prismatic"> 
+      <parent link="${parent}" />
+      <child  link="${name}_sensor_cell" />
+      <axis xyz="0 0 1" rpy="0 0 0" />
+        <origin xyz="${xpos} ${ypos} ${zpos}" rpy="0 0 0" />
+      <limit lower="-${d_sz}" upper="0.0" effort="1000" velocity="1" />
+    </joint>
+
+    <transmission name="${name}_sensor_joint_transmission">
+      <type>transmission_interface/SimpleTransmission</type>
+      <joint name="${name}_sensor_joint" >
+        <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+      </joint>
+      <actuator name="${name}_sensor_joint_motor" >
+        <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+        <mechanicalReduction>1</mechanicalReduction>
+      </actuator>
+    </transmission>
+
+    <!-- contact sensor -->
+    <xacro:if value="$(arg use_gazebo_contact_plugin)" >
+    <gazebo reference="${name}_sensor_cell">
+      <sensor type="contact" name="${name}_sensor_cell/contact_sensor">
+        <update_rate>1000.0</update_rate>
+        <always_on>1</always_on>
+        <contact>
+          <!-- <collision>${parent}/string_${basename}_${id}/link_coll_geom</collision> -->
+          <collision>${name}_sensor_cell_collision</collision>
+          <topic>${name}_sensor_cell/link_contact_gztopic</topic>
+        </contact>
+        <plugin name="gazebo_ros_bumper_controller" filename="libgazebo_ros_bumper.so">
+          <alwaysOn>true</alwaysOn>
+          <updateRate>101.0</updateRate>
+          <bumperTopicName>${name}_sensor_cell/contact</bumperTopicName>
+          <frameName>${name}_sensor_cell</frameName>
+        </plugin>
+      </sensor>
+    </gazebo>
+    </xacro:if>
+
+    <!-- gazebo force/torque sensor plugin -->
+    <xacro:if value="$(arg use_gazebo_ft_plugin)" >
+    <gazebo>
+      <plugin name="${name}_sensor_cell_ft_sensor" filename="libgazebo_ros_ft_sensor.so">
+      <updateRate>80.0</updateRate>
+      <topicName>${name}_sensor_cell/wrench</topicName>
+      <jointName>${name}_sensor_joint</jointName>
+      <robotNamespace></robotNamespace>
+      </plugin>
+    </gazebo>
+    </xacro:if>
+  
+    <gazebo reference="${name}_sensor_joint">
+      <provideFeedback>true</provideFeedback>
+    </gazebo>
+
+  </xacro:macro>
+
+
+  <!-- a tactile 1D-array along the x-axis with nx cells of cell size sx*sy*sz 
+       and given d_sz sensor penetration depth. Origin is at the center of cell 0.
+       The active area of each cell is (sx-border)*(sy-border).
+  -->
+  <xacro:macro name="tactile_sensor_array" params="parent name nx sx sy sz d_sz border xpos ypos zpos">
+
+    <!-- create sensor cell $nx -->
+    <xacro:tactile_sensor_cell name="${name}_${nx-1}" 
+           parent="world" sx="${sx}" sy="${sy}" sz="${sz}" d_sz="${d_sz}" border="${border}"
+           xpos="${xpos+(nx-1)*sx}" ypos="${ypos}" zpos="${zpos}" >
+    </xacro:tactile_sensor_cell>
+
+    <!-- recursion for $nx-1 -->
+    <xacro:if value="${nx > 1}">
+      <xacro:tactile_sensor_array 
+             parent="world" name="${name}" nx="${nx-1}"  
+             sx="${sx}" sy="${sy}" sz="${sz}" d_sz="${d_sz}" border="${border}"
+             xpos="${xpos}" ypos="${ypos}" zpos="${zpos}" >
+      </xacro:tactile_sensor_array >
+    </xacro:if>
+  </xacro:macro>
+
+ 
+  <!-- a tactile 2D-matrix array along +yaxis and +xaxis axis with ny*nx cells of cell size sx*sy*sz 
+       and given d_sz sensor penetration depth. Origin is at the center of cell 0.
+       The active area of each cell is (sx-border)*(sy-border).
+  -->
+  <xacro:macro name="tactile_sensor_matrix" params="parent name ny nx sx sy sz d_sz border xpos ypos zpos">
+
+    <!-- create 1D-array at y-position ${ny*sy} -->
+    <xacro:tactile_sensor_array name="${name}_${ny-1}" 
+           parent="world" nx="${nx}" sx="${sx}" sy="${sy}" sz="${sz}" d_sz="${d_sz}" border="${border}"
+           xpos="${xpos}" ypos="${ypos+(ny-1)*sy}" zpos="${zpos}" >
+    </xacro:tactile_sensor_array>
+
+    <!-- recursion for $ny-1 -->
+    <xacro:if value="${ny > 1}">
+      <xacro:tactile_sensor_matrix
+             parent="world" name="${name}" ny="${ny-1}" nx="${nx}"  
+             sx="${sx}" sy="${sy}" sz="${sz}" d_sz="${d_sz}" border="${border}"
+             xpos="${xpos}" ypos="${ypos}" zpos="${zpos}" >
+      </xacro:tactile_sensor_matrix>
+    </xacro:if>
+  </xacro:macro>
+
+
+  <!-- selftest... three sensors mounted to world -->
+  <xacro:if value="$(arg make_selftest)" >
+
+    <link name="world" />
+
+    <xacro:tactile_sensor_joint_state_controller/>
+
+    <!-- by default, the sensor falls down and then also contacts the ground_plane :-) -->
+    <xacro:tactile_sensor_cell name="tactile1" parent="world" 
+                sx="0.1" sy="0.1" sz="0.004" d_sz="0.001" border="0.0"
+                xpos="0" ypos="0" zpos="0.01" >
+    </xacro:tactile_sensor_cell>
+
+    <xacro:tactile_sensor_array name="tactile_array1" parent="world" nx="6" 
+                sx="0.1" sy="0.1" sz="0.005" d_sz="0.001" border="0.01"
+                xpos="-0.2" ypos="0.5" zpos="0.01" >
+    </xacro:tactile_sensor_array>
+
+    <xacro:tactile_sensor_matrix name="tactile_matrix1" parent="world" ny="5" nx="3" 
+                sx="0.1" sy="0.1" sz="0.01" d_sz="0.001" border="0.01"
+                xpos="0.2" ypos="-0.2" zpos="0.01" >
+    </xacro:tactile_sensor_matrix>
+
+  </xacro:if>
+
+
+</robot>
