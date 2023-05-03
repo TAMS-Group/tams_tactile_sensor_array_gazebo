@@ -49,7 +49,7 @@ need one of the plugins, and keep the other one going.
 ## Nodes
 
 Currently, only two simple ROS nodes are provided in this package.
-Both are implemented as Python scripts located in the <tt>nodes/<tt>
+Both are implemented as Python scripts located in the <tt>nodes</tt>
 subdirectory:
 
 - <tt>tactile_sensor_visualizer</tt> subscribes to the Wrench
